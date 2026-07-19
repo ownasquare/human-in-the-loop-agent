@@ -193,14 +193,27 @@ class GoogleCalendarAdapter:
             body = response.json()
             if not isinstance(body, dict):
                 raise ValueError("Google Calendar returned an invalid read body.")
+            calendars = body.get("calendars")
+            calendar = calendars.get(action.calendar_id) if isinstance(calendars, dict) else None
+            raw_busy = calendar.get("busy") if isinstance(calendar, dict) else None
+            if not isinstance(raw_busy, list):
+                raise ValueError("Google Calendar returned an invalid read body.")
+            busy = []
+            for slot in raw_busy[:50]:
+                if not isinstance(slot, dict):
+                    continue
+                start = slot.get("start")
+                end = slot.get("end")
+                if isinstance(start, str) and isinstance(end, str):
+                    busy.append({"start": start[:64], "end": end[:64]})
         except (TypeError, ValueError) as exc:
             raise ToolExecutionError(
                 "Calendar request failed safely.", code="calendar_failed"
             ) from exc
         return AdapterResult(
             provider="google_calendar",
-            provider_id=str(body.get("id", "")) or None,
-            data={"calendar_response": body},
+            provider_id=None,
+            data={"calendar_id": action.calendar_id, "busy": busy},
         )
 
     async def _create_event(
@@ -238,6 +251,17 @@ class GoogleCalendarAdapter:
                         event_id=event_id,
                         headers=headers,
                         base=base,
+                        reconciled_existing=True,
+                    )
+                if 200 <= response.status_code < 300:
+                    return await self._read_existing_event(
+                        client,
+                        action,
+                        idempotency_key=idempotency_key,
+                        event_id=event_id,
+                        headers=headers,
+                        base=base,
+                        reconciled_existing=False,
                     )
         except _AMBIGUOUS_WRITE_ERRORS as exc:
             raise OutcomeUnknownError(
@@ -266,19 +290,9 @@ class GoogleCalendarAdapter:
                 "Calendar provider outcome is unknown; reconcile before retrying.",
                 code="outcome_unknown",
             )
-        try:
-            body = response.json()
-            if not isinstance(body, dict) or body.get("id") != event_id:
-                raise ValueError("Google Calendar returned an invalid create body.")
-        except (TypeError, ValueError) as exc:
-            raise OutcomeUnknownError(
-                "Calendar provider outcome is unknown; reconcile before retrying.",
-                code="outcome_unknown",
-            ) from exc
-        return AdapterResult(
-            provider="google_calendar",
-            provider_id=event_id,
-            data={"calendar_response": body},
+        raise OutcomeUnknownError(
+            "Calendar provider outcome is unknown; reconcile before retrying.",
+            code="outcome_unknown",
         )
 
     async def _read_existing_event(
@@ -290,6 +304,7 @@ class GoogleCalendarAdapter:
         event_id: str,
         headers: dict[str, str],
         base: str,
+        reconciled_existing: bool,
     ) -> AdapterResult:
         try:
             response = await client.get(f"{base}/events/{event_id}", headers=headers)
@@ -320,5 +335,8 @@ class GoogleCalendarAdapter:
         return AdapterResult(
             provider="google_calendar",
             provider_id=event_id,
-            data={"calendar_response": body},
+            data={
+                "calendar_response": body,
+                "reconciled_existing": reconciled_existing,
+            },
         )

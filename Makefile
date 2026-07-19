@@ -1,4 +1,4 @@
-.PHONY: install dev api web check check-backend check-web test test-component test-e2e audit build clean
+.PHONY: install dev api web check check-backend check-web test test-component test-e2e audit build clean live-doctor live-claude live-tavily
 
 install:
 	uv sync --frozen --all-extras --dev
@@ -46,3 +46,12 @@ build:
 
 clean:
 	uv run relay demo reset
+
+live-doctor:
+	uv run relay live doctor
+
+live-claude:
+	uv run relay live claude --confirm RUN_LIVE_CLAUDE
+
+live-tavily:
+	uv run relay live tavily --confirm RUN_LIVE_TAVILY

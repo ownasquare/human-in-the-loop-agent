@@ -50,3 +50,69 @@ def test_blank_secret_values_are_not_reported_as_configured(tmp_path) -> None:
         "database": True,
         "purchasing": True,
     }
+
+
+def test_reserved_email_senders_are_not_live_ready(tmp_path) -> None:
+    for sender in (
+        "relay@example.invalid",
+        "relay@example.test",
+        "relay@example.com",
+        "relay@subdomain.example.net",
+        "relay@localhost",
+    ):
+        settings = Settings(
+            data_dir=tmp_path,
+            resend_api_key=SecretStr("test-key"),
+            email_from=sender,
+        )
+        assert settings.connector_configuration()["email"] is False
+
+
+def test_real_sender_and_key_are_live_ready(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        resend_api_key=SecretStr("test-key"),
+        email_from="relay@company.example.co",
+    )
+
+    assert settings.connector_configuration()["email"] is True
+
+
+def test_live_connector_readiness_contains_only_fixed_non_secret_fields(tmp_path) -> None:
+    settings = Settings(
+        data_dir=tmp_path,
+        anthropic_api_key=SecretStr("anthropic-fixture-secret"),
+        tavily_api_key=SecretStr("tavily-fixture-secret"),
+        resend_api_key=SecretStr("resend-fixture-secret"),
+        email_from="relay@company.example.co",
+        acceptance_email_to=SecretStr("controlled@company.example.co"),
+        google_calendar_access_token=SecretStr("calendar-fixture-secret"),
+    )
+
+    report = settings.live_connector_readiness()
+
+    assert [item["name"] for item in report] == [
+        "claude",
+        "tavily",
+        "resend",
+        "google_calendar_read",
+        "google_calendar_write",
+        "database",
+        "purchasing",
+    ]
+    assert all(set(item) == {"name", "configured", "ready", "detail"} for item in report)
+    assert report[-1] == {
+        "name": "purchasing",
+        "configured": False,
+        "ready": False,
+        "detail": "disabled_in_live_mode",
+    }
+    serialized = str(report)
+    for secret in (
+        "anthropic-fixture-secret",
+        "tavily-fixture-secret",
+        "resend-fixture-secret",
+        "calendar-fixture-secret",
+        "controlled@company.example.co",
+    ):
+        assert secret not in serialized

@@ -37,6 +37,7 @@ Copy `.env.example` to an untracked `.env`. Do not commit the result.
 | `TAVILY_API_KEY` | empty | Tavily credential |
 | `RESEND_API_KEY` | empty | Resend credential |
 | `RELAY_EMAIL_FROM` | `relay@example.invalid` in source | Allowed sender identity; `.env.example` supplies a demo value |
+| `RELAY_ACCEPTANCE_EMAIL_TO` | empty | Controlled non-production recipient for the explicit Resend acceptance lane only |
 | `GOOGLE_CALENDAR_ACCESS_TOKEN` | empty | Google Calendar access token |
 | `GOOGLE_CALENDAR_ID` | `primary` | Target calendar identifier |
 | `RELAY_CALENDAR_SEND_UPDATES_DEFAULT` | `none` | Default for deterministic calendar writes: `none`, `all`, or `externalOnly`; the resulting action value is still reviewed and hashed |
@@ -218,15 +219,25 @@ outside demo mode and must never call a live provider. See [Demo](demo.md) for t
 
 ## Live connector activation
 
-Activate live mode deliberately:
+Do not begin provider acceptance by switching the whole application to live mode. Follow
+[Live provider acceptance](live-acceptance.md) first:
 
-1. keep the overall app on loopback;
-2. configure every required connector with its narrowest credential scope;
-3. set `RELAY_MODE=live`, run `relay doctor`, and inspect only configured/not-configured state;
-4. use dedicated non-production accounts, recipients, calendars, and records;
-5. exercise one bounded connector boundary at a time with visible approval for writes;
-6. capture each provider receipt and readback separately; and
-7. record connector-specific live proof separately from demo proof.
+1. keep the overall app on loopback and use dedicated non-production accounts;
+2. configure the narrowest credential and controlled target needed for one lane;
+3. run `relay live doctor`, which reports every lane without constructing a provider client;
+4. execute Claude, Tavily, Google read, Resend, and Google write separately with their exact
+   acknowledgement phrases;
+5. capture each lane's sanitized result, provider readback, and human delivery/notification check
+   separately; and
+6. reconcile any `outcome_unknown` before another write is authorized.
+
+The preflight exits nonzero while any required full-live connector is incomplete. A passing lane
+proves only that connector. Normal pytest skips live tests, and `--run-live` still requires the
+single selected `--live-lane` plus that provider's exact opt-in variable.
+
+Set `RELAY_MODE=live` only after every required connector has independent current acceptance proof.
+Then run `relay doctor` and a separately authorized end-to-end integration workflow. Full live mode
+remains local and single-instance; it is not hosted or production proof.
 
 ### Claude planning
 

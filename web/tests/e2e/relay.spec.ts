@@ -362,10 +362,11 @@ test("packaged app completes all four real approval gates with write readbacks",
   await expect(page).toHaveURL(/\/runs\/run_/);
 
   const approveGate = async (title: string, canRevise: boolean) => {
-    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
-    await expect(page.getByText("Waiting for you", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Review request" })).toHaveCount(1);
-    await page.getByRole("button", { name: "Review request" }).click();
+    const approvalBanner = page.getByRole("region", { name: title, exact: true });
+    await expect(approvalBanner.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    await expect(approvalBanner.getByText("Waiting for you", { exact: true })).toBeVisible();
+    await expect(approvalBanner.getByRole("button", { name: "Review request" })).toHaveCount(1);
+    await approvalBanner.getByRole("button", { name: "Review request" }).click();
     const dialog = page.getByRole("dialog", { name: title });
     await expect(dialog.getByRole("button", { name: "Reject", exact: true })).toBeFocused();
     if (canRevise) {
@@ -374,7 +375,7 @@ test("packaged app completes all four real approval gates with write readbacks",
       await expect(dialog.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
     }
     await dialog.getByRole("button", { name: "Approve action" }).click();
-    await expect(dialog).not.toBeVisible();
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
   };
 
   await approveGate("Create calendar event", true);

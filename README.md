@@ -15,7 +15,8 @@ search, email, and calendar connections are explicit opt-ins; a failed live conn
 back to fixture data.
 
 > Relay is a local-first reference application, not a hosted service. It has no built-in user
-> authentication. Keep it on loopback or behind authentication and authorization you operate.
+> authentication. Keep v0.1.0 on loopback; an access proxy alone does not make it safe to expose.
+> See the [hosted-deployment gates](docs/hosted-deployment.md) before designing any remote access.
 
 ## Run the guided demo
 
@@ -103,6 +104,7 @@ before changing it.
 
 ```bash
 uv run relay doctor          # Credential-safe readiness check
+uv run relay live doctor     # Configuration-only live connector preflight
 uv run relay serve           # Start the API
 uv run relay demo reset      # Restore deterministic demo data
 uv run relay graph           # Print the LangGraph as Mermaid
@@ -136,6 +138,9 @@ Interactive OpenAPI docs are at `http://127.0.0.1:8000/docs` while the API is ru
 | [Safety model](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/docs/safety.md) | You are changing approval or execution behavior |
 | [API](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/docs/api.md) | You are integrating with the versioned service |
 | [Operations](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/docs/operations.md) | You are configuring, backing up, or recovering Relay |
+| [Live acceptance](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/docs/live-acceptance.md) | You are proving one optional provider boundary at a time |
+| [Hosted deployment](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/docs/hosted-deployment.md) | You are evaluating identity, tenancy, or public-network requirements |
+| [Publishing](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/docs/publishing.md) | You are a maintainer preparing a tagged PyPI release |
 | [Contributing](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/CONTRIBUTING.md) | You are developing or adding a tool |
 | [Support](https://github.com/ownasquare/human-in-the-loop-agent/blob/main/SUPPORT.md) | You are troubleshooting or opening an issue |
 | [Security](https://github.com/ownasquare/human-in-the-loop-agent/security/policy) | You need deployment cautions or private reporting rules |

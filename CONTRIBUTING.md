@@ -104,8 +104,10 @@ Cypress is exclusively for React component tests under `web/cypress/component/`.
 exclusively for end-to-end tests under `web/tests/e2e/`. Do not add or run Cypress E2E tests.
 
 Tests that exercise a real provider must use the `live` marker or the project's equivalent explicit
-opt-in. They must never run during the default offline suite. Mock-backed and live-provider results
-must be reported separately.
+opt-in. Relay requires `--run-live`, one exact `--live-lane`, and that lane's acknowledgement
+variable; `--run-live` alone remains inert and every other lane stays skipped. Follow
+[Live provider acceptance](docs/live-acceptance.md) and keep mock-backed and live-provider results
+separate.
 
 ## Change-specific assurance
 
