@@ -5,7 +5,21 @@ below track the public source releases.
 
 ## Unreleased
 
-- No unreleased changes.
+### Added
+
+- Connector-by-connector live acceptance commands with explicit read-only and write acknowledgements,
+  controlled targets, sanitized results, and live tests that are skipped by default.
+- A least-privilege PyPI Trusted Publishing workflow, maintainer runbook, and newcomer adoption
+  feedback form.
+- A source-backed hosted-deployment decision that separates a future single-operator demo from the
+  identity, tenancy, Postgres, and operational controls required for production.
+
+### Changed
+
+- Live readiness rejects reserved example senders and can inspect every connector without creating
+  provider clients; live pytest runs require exactly one selected lane.
+- Google Calendar writes require exact provider GET readback after creation, and Resend acceptance
+  verifies current-invocation provider readback and duplicate suppression.
 
 ## 0.1.0 — 2026-07-18
 

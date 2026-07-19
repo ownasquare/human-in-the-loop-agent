@@ -58,6 +58,10 @@ deployment, operators must add and validate:
 - provider-specific idempotency and reconciliation; and
 - audit export to a system whose administrators cannot silently rewrite application history.
 
+The current public-hosting decision and the separate hosted-demo and production gates are defined
+in [Hosted deployment](docs/hosted-deployment.md). Relay v0.1.0 must remain on loopback until the
+applicable gate is implemented and validated.
+
 Never put credentials into an instruction, action payload, approval comment, URL, screenshot,
 issue, or test fixture. Use a secret manager or an uncommitted local `.env` file. `relay doctor`
 reports presence/readiness only and must never print a credential value.
