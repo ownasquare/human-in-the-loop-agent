@@ -1,0 +1,49 @@
+name: relay
+
+services:
+  relay:
+    build:
+      context: .
+    image: relay-hitl-agent:local
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      - relay-data:/app/data
+    environment:
+      RELAY_MODE: ${RELAY_MODE:-demo}
+      RELAY_DATA_DIR: /app/data
+      RELAY_STATIC_DIR: /app/static
+      RELAY_HOST: 0.0.0.0
+      RELAY_PORT: 8000
+      RELAY_ALLOW_CONTAINER_BIND: "true"
+      RELAY_ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RELAY_EMAIL_FROM: ${RELAY_EMAIL_FROM:-relay@example.invalid}
+      GOOGLE_CALENDAR_ACCESS_TOKEN: ${GOOGLE_CALENDAR_ACCESS_TOKEN:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+      RELAY_CALENDAR_SEND_UPDATES_DEFAULT: ${RELAY_CALENDAR_SEND_UPDATES_DEFAULT:-none}
+    ports:
+      - "127.0.0.1:${RELAY_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+
+volumes:
+  relay-data:

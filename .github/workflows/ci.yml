@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RELAY_MODE: demo
+  RELAY_DATA_DIR: .relay-ci
+  LANGGRAPH_STRICT_MSGPACK: "true"
+
+jobs:
+  backend:
+    name: Backend / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.29"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-extras --dev
+      - name: Use the documented demo environment
+        run: cp .env.example .env
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Lint and format
+        if: matrix.python-version == '3.12'
+        run: |
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+      - name: Type check
+        if: matrix.python-version == '3.12'
+        run: uv run mypy src
+      - name: Test with branch coverage
+        run: uv run pytest --cov=relay --cov-branch --cov-report=term-missing --cov-report=xml
+      - name: Python security checks
+        if: matrix.python-version == '3.12'
+        run: |
+          uv run bandit -q -r src
+          uv run pip-audit
+      - name: Build wheel and source distribution
+        if: matrix.python-version == '3.12'
+        run: uv build
+
+  frontend:
+    name: Frontend / lint, component, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npm run typecheck
+      - name: Cypress component tests
+        run: npm run test:component
+      - name: Build production frontend
+        run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  e2e:
+    name: Packaged local browser workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+      - name: Install Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Start packaged demo
+        run: docker compose up --build --detach relay
+      - name: Wait for health and readiness
+        run: |
+          for attempt in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:8000/api/v1/health >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8000/api/v1/health
+          python -c 'import json, urllib.request; result = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/v1/readiness")); assert result.get("ready") is True, result'
+      - name: Playwright end-to-end tests
+        working-directory: web
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:8000
+        run: npm run test:e2e
+      - name: Show sanitized service status
+        if: failure()
+        run: docker compose ps
+      - name: Stop packaged demo
+        if: always()
+        run: docker compose down --volumes

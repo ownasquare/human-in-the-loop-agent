@@ -1,0 +1,45 @@
+name: Feature or safety proposal
+description: Propose a focused workflow, connector, policy, or usability change.
+title: "[Proposal]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the outcome that is difficult today, without prescribing implementation first.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Keep the core start, review, decide, and verify workflow in view.
+    validations:
+      required: true
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Safety impact
+      options:
+        - No approval or execution impact
+        - Read-only tool or planning change
+        - Write tool or approval-policy change
+        - Persistence, identity, or audit change
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: proof
+    attributes:
+      label: Suggested proof
+      description: Name the focused tests and fixture, live-provider, hosted, or production boundary.
+    validations:
+      required: true
+  - type: checkboxes
+    id: guardrail
+    attributes:
+      label: Guardrail
+      options:
+        - label: This proposal does not ask model output to override server-owned approval policy.
+          required: true

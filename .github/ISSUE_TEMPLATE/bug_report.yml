@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible Relay defect without private data or credentials.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not include secrets, private records, message content, provider receipts, or exploitable
+        security details. Use GitHub private vulnerability reporting for security issues once it is enabled.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 0.1.0 or a commit hash
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Runtime mode
+      options:
+        - Deterministic demo
+        - Live connectors
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: List the smallest commands or browser actions that reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include sanitized error codes or logs only.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS 15, Python 3.12, Node 22, Docker Desktop
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Proof boundary
+      options:
+        - label: I have stated whether the result is fixture, local, live-provider, hosted, or production proof.
+          required: true
+        - label: I removed credentials and private data from this report.
+          required: true
