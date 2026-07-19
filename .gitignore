@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .relay/
+.relay-*/
 .venv/
 __pycache__/
 *.py[cod]

@@ -46,6 +46,70 @@ def _reviewed_event(event_id: str, idempotency_key: str) -> dict[str, object]:
 
 
 @respx.mock
+async def test_google_calendar_availability_returns_bounded_slots(tmp_path) -> None:
+    route = respx.post("https://www.googleapis.com/calendar/v3/freeBusy").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "calendars": {
+                    "primary": {
+                        "busy": [
+                            {
+                                "start": "2030-01-15T10:00:00Z",
+                                "end": "2030-01-15T10:30:00Z",
+                            }
+                        ]
+                    }
+                }
+            },
+        )
+    )
+    action = CalendarAvailabilityAction(
+        calendar_id="primary",
+        start_at="2030-01-15T09:00:00Z",
+        end_at="2030-01-15T17:00:00Z",
+    )
+
+    result = await GoogleCalendarAdapter(_settings(tmp_path), "calendar_availability").execute(
+        action, idempotency_key="calendar-read"
+    )
+
+    assert route.called
+    assert '"id":"primary"' in route.calls[0].request.content.decode()
+    assert result.provider == "google_calendar"
+    assert result.data == {
+        "calendar_id": "primary",
+        "busy": [{"start": "2030-01-15T10:00:00Z", "end": "2030-01-15T10:30:00Z"}],
+    }
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, json={"calendars": {"primary": {"busy": "invalid"}}}),
+        httpx.Response(503),
+    ],
+)
+async def test_google_calendar_availability_fails_safely(
+    tmp_path, response: httpx.Response
+) -> None:
+    respx.post("https://www.googleapis.com/calendar/v3/freeBusy").mock(return_value=response)
+    action = CalendarAvailabilityAction(
+        calendar_id="primary",
+        start_at="2030-01-15T09:00:00Z",
+        end_at="2030-01-15T17:00:00Z",
+    )
+
+    with pytest.raises(ToolExecutionError, match="failed safely") as caught:
+        await GoogleCalendarAdapter(_settings(tmp_path), "calendar_availability").execute(
+            action, idempotency_key="calendar-read-failure"
+        )
+
+    assert caught.value.code == "calendar_failed"
+
+
+@respx.mock
 async def test_google_calendar_conflict_reads_exact_idempotent_event(tmp_path) -> None:
     settings = _settings(tmp_path)
     idempotency_key = "relay:run:step:1"
@@ -60,8 +124,46 @@ async def test_google_calendar_conflict_reads_exact_idempotent_event(tmp_path) -
         idempotency_key=idempotency_key,
     )
     assert result.provider_id == event_id
+    assert result.data["reconciled_existing"] is True
     assert respx.calls.call_count == 2
     assert respx.calls[0].request.url.params["sendUpdates"] == "externalOnly"
+
+
+@respx.mock
+async def test_google_calendar_success_requires_exact_get_readback(tmp_path) -> None:
+    idempotency_key = "relay:run:step:success-readback"
+    event_id = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    base = "https://www.googleapis.com/calendar/v3/calendars/primary"
+    respx.post(f"{base}/events").mock(
+        return_value=httpx.Response(200, json=_reviewed_event(event_id, idempotency_key))
+    )
+    respx.get(f"{base}/events/{event_id}").mock(
+        return_value=httpx.Response(200, json=_reviewed_event(event_id, idempotency_key))
+    )
+
+    result = await GoogleCalendarAdapter(_settings(tmp_path), "calendar_create").execute(
+        _create_action(), idempotency_key=idempotency_key
+    )
+
+    assert result.provider_id == event_id
+    assert result.data["reconciled_existing"] is False
+    assert respx.calls.call_count == 2
+
+
+@respx.mock
+async def test_google_calendar_mismatched_success_readback_is_unknown(tmp_path) -> None:
+    idempotency_key = "relay:run:step:mismatched-readback"
+    event_id = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    base = "https://www.googleapis.com/calendar/v3/calendars/primary"
+    mismatched = _reviewed_event(event_id, idempotency_key)
+    mismatched["description"] = "Unexpected provider copy"
+    respx.post(f"{base}/events").mock(return_value=httpx.Response(200, json={"id": event_id}))
+    respx.get(f"{base}/events/{event_id}").mock(return_value=httpx.Response(200, json=mismatched))
+
+    with pytest.raises(OutcomeUnknownError, match="outcome is unknown"):
+        await GoogleCalendarAdapter(_settings(tmp_path), "calendar_create").execute(
+            _create_action(), idempotency_key=idempotency_key
+        )
 
 
 @respx.mock
@@ -110,11 +212,16 @@ async def test_google_calendar_client_error_fails_safely(tmp_path) -> None:
 @respx.mock
 async def test_google_calendar_malformed_success_has_unknown_outcome(tmp_path) -> None:
     base = "https://www.googleapis.com/calendar/v3/calendars/primary"
-    respx.post(f"{base}/events").mock(return_value=httpx.Response(200, content=b"not-json"))
+    idempotency_key = "relay:run:step:malformed-success"
+    event_id = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+    respx.post(f"{base}/events").mock(return_value=httpx.Response(200, json={"id": event_id}))
+    respx.get(f"{base}/events/{event_id}").mock(
+        return_value=httpx.Response(200, content=b"not-json")
+    )
 
     with pytest.raises(OutcomeUnknownError, match="outcome is unknown"):
         await GoogleCalendarAdapter(_settings(tmp_path), "calendar_create").execute(
-            _create_action(), idempotency_key="relay:run:step:malformed-success"
+            _create_action(), idempotency_key=idempotency_key
         )
 
 

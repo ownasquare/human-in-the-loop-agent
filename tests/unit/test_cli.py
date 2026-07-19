@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uvicorn
+from pydantic import SecretStr
 from typer.testing import CliRunner
 
 from relay import cli
@@ -39,3 +40,47 @@ def test_serve_passes_reload_and_safe_bind_to_uvicorn(settings, monkeypatch) -> 
             "factory": True,
         }
     ]
+
+
+def test_live_doctor_reports_every_connector_without_opening_runtime(settings, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    def forbidden_runtime(*args: object, **kwargs: object) -> None:
+        raise AssertionError("live doctor must not construct the runtime")
+
+    monkeypatch.setattr(cli, "open_runtime", forbidden_runtime)
+    result = CliRunner().invoke(cli.app, ["live", "doctor"])
+
+    assert result.exit_code == 1
+    assert "Relay live preflight" in result.stdout
+    for name in (
+        "claude",
+        "tavily",
+        "resend",
+        "google_calendar_read",
+        "google_calendar_write",
+        "database",
+        "purchasing",
+    ):
+        assert name in result.stdout
+
+
+def test_live_doctor_succeeds_when_every_required_connector_is_configured(
+    settings, monkeypatch
+) -> None:
+    settings.anthropic_api_key = SecretStr("fixture-anthropic")
+    settings.tavily_api_key = SecretStr("fixture-tavily")
+    settings.resend_api_key = SecretStr("fixture-resend")
+    settings.email_from = "relay@company.example.co"
+    settings.acceptance_email_to = SecretStr("controlled@company.example.co")
+    settings.google_calendar_access_token = SecretStr("fixture-google")
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    def forbidden_runtime(*args: object, **kwargs: object) -> None:
+        raise AssertionError("live doctor must not construct the runtime")
+
+    monkeypatch.setattr(cli, "open_runtime", forbidden_runtime)
+    result = CliRunner().invoke(cli.app, ["live", "doctor"])
+
+    assert result.exit_code == 0
+    assert "disabled_in_live_mode" in result.stdout

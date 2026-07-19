@@ -47,6 +47,8 @@ async def test_resend_uses_exact_reviewed_configured_sender(tmp_path) -> None:
     )
     assert result.provider_id == "email_123"
     assert route.calls[0].request.content
+    assert route.calls[0].request.headers["Idempotency-Key"] == "relay-email-idempotency"
+    assert route.calls[0].request.headers["Authorization"].startswith("Bearer ")
     assert '"from":"verified@example.com"' in route.calls[0].request.content.decode()
 
     with pytest.raises(ToolExecutionError, match="configured sender"):
@@ -109,3 +111,67 @@ async def test_resend_malformed_success_body_has_unknown_outcome(tmp_path) -> No
         await ResendEmailAdapter(_settings(tmp_path)).execute(
             _action(), idempotency_key="relay-email-malformed-success"
         )
+
+
+@respx.mock
+async def test_resend_readback_validates_exact_reviewed_email(tmp_path) -> None:
+    route = respx.get("https://api.resend.com/emails/email_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "email_123",
+                "from": "verified@example.com",
+                "to": ["reviewer@example.com"],
+                "cc": [],
+                "created_at": "2030-01-15 10:00:00+00:00",
+                "subject": "Review",
+                "text": "Please review",
+            },
+        )
+    )
+
+    result = await ResendEmailAdapter(_settings(tmp_path)).readback("email_123", _action())
+
+    assert route.called
+    assert route.calls[0].request.headers["Authorization"].startswith("Bearer ")
+    assert result.provider_id == "email_123"
+    assert result.data == {
+        "matches_reviewed": True,
+        "created_at": "2030-01-15 10:00:00+00:00",
+    }
+
+
+@respx.mock
+async def test_resend_readback_mismatch_fails_safely(tmp_path) -> None:
+    respx.get("https://api.resend.com/emails/email_123").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "email_123",
+                "from": "verified@example.com",
+                "to": ["other@example.com"],
+                "cc": [],
+                "created_at": "2030-01-15 10:00:00+00:00",
+                "subject": "Review",
+                "text": "Please review",
+            },
+        )
+    )
+
+    with pytest.raises(ToolExecutionError, match="readback failed safely") as caught:
+        await ResendEmailAdapter(_settings(tmp_path)).readback("email_123", _action())
+
+    assert caught.value.code == "email_readback_failed"
+
+
+@respx.mock
+@pytest.mark.parametrize("response", [httpx.Response(404), httpx.Response(200, content=b"bad")])
+async def test_resend_readback_http_and_schema_fail_safely(
+    tmp_path, response: httpx.Response
+) -> None:
+    respx.get("https://api.resend.com/emails/email_123").mock(return_value=response)
+
+    with pytest.raises(ToolExecutionError, match="readback failed safely") as caught:
+        await ResendEmailAdapter(_settings(tmp_path)).readback("email_123", _action())
+
+    assert caught.value.code == "email_readback_failed"

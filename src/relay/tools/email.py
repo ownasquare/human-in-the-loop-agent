@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 
 from relay.config import Settings
@@ -124,4 +126,54 @@ class ResendEmailAdapter:
             provider="resend",
             provider_id=message_id,
             data={"message_id": message_id, "recipients": action.to, "subject": action.subject},
+        )
+
+    async def readback(self, message_id: str, action: EmailSendAction) -> AdapterResult:
+        """Read and validate the provider copy without exposing its payload."""
+
+        if self.settings.resend_api_key is None:
+            raise ToolExecutionError("Resend is not configured.", code="connector_not_configured")
+        if not message_id or len(message_id) > 500:
+            raise ToolExecutionError("Email readback failed safely.", code="email_readback_failed")
+        headers = {
+            "Authorization": f"Bearer {self.settings.resend_api_key.get_secret_value()}",
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(self.settings.request_timeout_seconds)
+            ) as client:
+                response = await client.get(
+                    f"https://api.resend.com/emails/{quote(message_id, safe='')}",
+                    headers=headers,
+                )
+                response.raise_for_status()
+                body = response.json()
+            if not isinstance(body, dict):
+                raise ValueError("Resend returned an invalid readback body.")
+            provider_to = body.get("to")
+            provider_cc = body.get("cc", [])
+            created_at = body.get("created_at")
+            if (
+                not isinstance(provider_to, list)
+                or not isinstance(provider_cc, list)
+                or not isinstance(created_at, str)
+            ):
+                raise ValueError("Resend returned invalid readback fields.")
+            if not (
+                body.get("id") == message_id
+                and body.get("from") == action.sender
+                and sorted(provider_to) == sorted(action.to)
+                and sorted(provider_cc) == sorted(action.cc)
+                and body.get("subject") == action.subject
+                and body.get("text") == action.body
+            ):
+                raise ValueError("Resend readback does not match the reviewed email.")
+        except (httpx.HTTPError, TypeError, ValueError) as exc:
+            raise ToolExecutionError(
+                "Email readback failed safely.", code="email_readback_failed"
+            ) from exc
+        return AdapterResult(
+            provider="resend",
+            provider_id=message_id,
+            data={"matches_reviewed": True, "created_at": created_at},
         )

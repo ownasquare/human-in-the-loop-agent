@@ -59,6 +59,11 @@ class TavilySearchAdapter:
                 response = await client.post("https://api.tavily.com/search", json=payload)
                 response.raise_for_status()
                 body = response.json()
+                if not isinstance(body, dict):
+                    raise ValueError("Tavily returned an invalid response body.")
+                raw_results = body.get("results")
+                if not isinstance(raw_results, list):
+                    raise ValueError("Tavily returned an invalid result collection.")
         except (httpx.HTTPError, ValueError) as exc:
             raise ToolExecutionError("Live search failed safely.", code="search_failed") from exc
         results = [
@@ -67,7 +72,7 @@ class TavilySearchAdapter:
                 "url": str(item.get("url", ""))[:2000],
                 "snippet": str(item.get("content", ""))[:2000],
             }
-            for item in body.get("results", [])[: action.max_results]
+            for item in raw_results[: min(action.max_results, self.settings.max_search_results)]
             if isinstance(item, dict)
         ]
         return AdapterResult(

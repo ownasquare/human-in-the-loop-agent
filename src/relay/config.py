@@ -4,10 +4,39 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_RESERVED_EMAIL_DOMAINS = {
+    "localhost",
+    "example",
+    "invalid",
+    "test",
+    "example.com",
+    "example.net",
+    "example.org",
+}
+
+
+class LiveConnectorReadiness(TypedDict):
+    """Credential-free configuration state for one live connector."""
+
+    name: str
+    configured: bool
+    ready: bool
+    detail: str
+
+
+def _is_real_sender(value: str) -> bool:
+    _, separator, domain = value.strip().lower().rpartition("@")
+    if separator != "@" or not domain:
+        return False
+    return not any(
+        domain == reserved or domain.endswith(f".{reserved}")
+        for reserved in _RESERVED_EMAIL_DOMAINS
+    )
 
 
 class Settings(BaseSettings):
@@ -49,6 +78,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("RELAY_RESEND_API_KEY", "RESEND_API_KEY"),
     )
     email_from: str = "relay@example.invalid"
+    acceptance_email_to: SecretStr | None = None
     google_calendar_access_token: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -65,6 +95,7 @@ class Settings(BaseSettings):
         "anthropic_api_key",
         "tavily_api_key",
         "resend_api_key",
+        "acceptance_email_to",
         "google_calendar_access_token",
         mode="before",
     )
@@ -116,14 +147,47 @@ class Settings(BaseSettings):
         return {
             "anthropic": self.anthropic_api_key is not None,
             "web_search": self.tavily_api_key is not None,
-            "email": (
-                self.resend_api_key is not None
-                and self.email_from.lower() != "relay@example.invalid"
-            ),
+            "email": self.resend_api_key is not None and _is_real_sender(self.email_from),
             "calendar": self.google_calendar_access_token is not None,
             "database": True,
             "purchasing": True,
         }
+
+    def live_connector_readiness(self) -> list[LiveConnectorReadiness]:
+        """Report fixed, non-secret live configuration state without provider construction."""
+
+        configured = self.connector_configuration()
+        acceptance_target = self.acceptance_email_to
+        resend_ready = configured["email"] and acceptance_target is not None
+        if acceptance_target is not None:
+            resend_ready = resend_ready and _is_real_sender(acceptance_target.get_secret_value())
+        lane_configuration = {
+            "claude": configured["anthropic"],
+            "tavily": configured["web_search"],
+            "resend": resend_ready,
+            "google_calendar_read": configured["calendar"],
+            "google_calendar_write": configured["calendar"],
+            "database": configured["database"],
+        }
+        rows: list[LiveConnectorReadiness] = []
+        for name, available in lane_configuration.items():
+            rows.append(
+                {
+                    "name": name,
+                    "configured": available,
+                    "ready": available,
+                    "detail": "configured" if available else "not_configured",
+                }
+            )
+        rows.append(
+            {
+                "name": "purchasing",
+                "configured": False,
+                "ready": False,
+                "detail": "disabled_in_live_mode",
+            }
+        )
+        return rows
 
 
 @lru_cache(maxsize=1)
