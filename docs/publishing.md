@@ -32,8 +32,10 @@ Before running the workflow, the release owner must:
    release tags matching `v*` for normal releases.
 5. Require a maintainer review on the `pypi` environment. When a second maintainer exists, prevent
    self-review, and disable administrator bypass of the environment protection rules.
-6. Protect `v*` tags with a repository ruleset that restricts tag creation, update, and deletion to
-   release maintainers.
+6. Protect `v*` tags with a repository ruleset that permits reviewed tag creation but blocks tag
+   updates, deletion, and non-fast-forward changes. On a personal repository, creation remains
+   limited by repository write access and the release process; do not add a bypass actor that can
+   silently move or delete an existing release tag.
 7. In the selected PyPI account or organization, create a pending GitHub Actions Trusted Publisher
    with this exact identity:
 
