@@ -22,3 +22,4 @@ below track the public source releases.
 
 - Simplified first-run and approval-review language for open-source adoption.
 - Made the Docker demo the primary onboarding path and documented the Python-only package boundary.
+- Updated CI actions to their current Node 24-backed major versions.
