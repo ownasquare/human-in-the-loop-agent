@@ -1,0 +1,387 @@
+name: Publish Python package
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact existing release tag to publish, such as v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay-pypi-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build exact tagged distributions
+    if: >-
+      (github.event_name == 'release' &&
+      github.event.action == 'published' &&
+      github.ref == format('refs/tags/{0}', github.event.release.tag_name) &&
+      github.ref_type == 'tag' &&
+      github.ref_protected == true) ||
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.ref_protected == true &&
+      github.workflow_ref == 'ownasquare/human-in-the-loop-agent/.github/workflows/release.yml@refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELAY_MODE: demo
+      RELAY_DATA_DIR: .relay-release
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    steps:
+      - name: Validate release tag syntax
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+
+          release_tag = os.environ["RELEASE_TAG"]
+          pattern = r"v[0-9]+(?:\.[0-9]+){2}(?:(?:a|b|rc)[0-9]+|\.post[0-9]+|\.dev[0-9]+)?"
+          if re.fullmatch(pattern, release_tag) is None:
+              raise SystemExit(f"Unsupported release tag: {release_tag!r}")
+          PY
+      - name: Verify published GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          api_url = os.environ["GITHUB_API_URL"].rstrip("/")
+          repository = urllib.parse.quote(os.environ["GITHUB_REPOSITORY"], safe="/")
+          release_tag = os.environ["RELEASE_TAG"]
+          github_token = os.environ["GITHUB_TOKEN"]
+          encoded_tag = urllib.parse.quote(release_tag, safe="")
+          request = urllib.request.Request(
+              f"{api_url}/repos/{repository}/releases/tags/{encoded_tag}",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {github_token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              release = json.load(response)
+
+          if release.get("tag_name") != release_tag:
+              raise SystemExit("Published release tag does not match the selected tag")
+          if release.get("draft") is not False or not release.get("published_at"):
+              raise SystemExit("Selected tag does not have a published GitHub release")
+          PY
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: refs/tags/${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-extras --dev
+      - name: Use the documented demo environment
+        run: cp .env.example .env
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Verify exact tag and package version
+        run: |
+          uv run python - <<'PY'
+          import os
+          import subprocess
+          import tomllib
+
+          release_tag = os.environ["RELEASE_TAG"]
+          with open("pyproject.toml", "rb") as project_file:
+              project_version = tomllib.load(project_file)["project"]["version"]
+
+          expected_tag = f"v{project_version}"
+          if release_tag != expected_tag:
+              raise SystemExit(
+                  f"Release tag {release_tag!r} does not match package version {project_version!r}"
+              )
+
+          tag_ref = f"refs/tags/{release_tag}"
+          subprocess.run(["git", "show-ref", "--verify", "--quiet", tag_ref], check=True)
+          tag_type = subprocess.check_output(
+              ["git", "cat-file", "-t", tag_ref], text=True
+          ).strip()
+          if tag_type != "tag":
+              raise SystemExit("Release tag must be an annotated tag")
+
+          tag_commit = subprocess.check_output(
+              ["git", "rev-list", "-n", "1", release_tag], text=True
+          ).strip()
+          head_commit = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          if tag_commit != head_commit:
+              raise SystemExit("Checked-out commit does not match the selected release tag")
+
+          subprocess.run(
+              ["git", "merge-base", "--is-ancestor", tag_commit, "origin/main"], check=True
+          )
+          PY
+      - name: Lint backend
+        run: uv run ruff check src tests
+      - name: Check backend formatting
+        run: uv run ruff format --check src tests
+      - name: Type check backend
+        run: uv run mypy src
+      - name: Test backend with branch coverage
+        run: uv run pytest --cov=relay --cov-branch --cov-report=term-missing
+      - name: Scan backend source
+        run: uv run bandit -q -r src
+      - name: Audit Python dependencies
+        run: uv run pip-audit
+      - name: Pin release build backend
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          Path(".release-build-constraints.txt").write_text(
+              "hatchling==1.31.0\n", encoding="utf-8"
+          )
+          PY
+      - name: Clean distribution directory
+        run: rm -rf dist
+      - name: Build wheel and source distribution
+        run: uv build --build-constraint .release-build-constraints.txt
+      - name: Remove non-distribution build marker
+        run: rm -f dist/.gitignore
+      - name: Inspect distribution identity
+        run: |
+          uv run python - <<'PY'
+          import re
+          import tarfile
+          import tomllib
+          import zipfile
+          from pathlib import Path
+
+          from packaging.metadata import Metadata
+          from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel_filename
+          from packaging.version import Version
+
+          with open("pyproject.toml", "rb") as project_file:
+              project = tomllib.load(project_file)["project"]
+
+          project_name = project["name"]
+          expected_name = canonicalize_name(project_name)
+          expected_version = Version(project["version"])
+          filename_name = re.sub(r"[-_.]+", "_", project_name)
+          expected_wheel = f"{filename_name}-{expected_version}-py3-none-any.whl"
+          expected_sdist = f"{filename_name}-{expected_version}.tar.gz"
+
+          files = sorted(path for path in Path("dist").iterdir() if path.is_file())
+          wheels = [path for path in files if path.suffix == ".whl"]
+          sdists = [path for path in files if path.name.endswith(".tar.gz")]
+          if len(files) != 2 or len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit("dist must contain exactly one wheel and one source distribution")
+
+          wheel = wheels[0]
+          sdist = sdists[0]
+          if wheel.name != expected_wheel or sdist.name != expected_sdist:
+              raise SystemExit("Distribution filenames do not match the project name and version")
+
+          wheel_name, wheel_version, _, _ = parse_wheel_filename(wheel.name)
+          sdist_name, sdist_version = parse_sdist_filename(sdist.name)
+          if canonicalize_name(wheel_name) != expected_name or wheel_version != expected_version:
+              raise SystemExit("Wheel filename identity does not match pyproject.toml")
+          if canonicalize_name(sdist_name) != expected_name or sdist_version != expected_version:
+              raise SystemExit("Source distribution filename identity does not match pyproject.toml")
+
+          def verify_metadata(raw_metadata: bytes, source: str) -> None:
+              metadata = Metadata.from_email(raw_metadata, validate=True)
+              if canonicalize_name(metadata.name) != expected_name:
+                  raise SystemExit(f"{source} metadata name does not match pyproject.toml")
+              if metadata.version != expected_version:
+                  raise SystemExit(f"{source} metadata version does not match pyproject.toml")
+
+          with zipfile.ZipFile(wheel) as wheel_archive:
+              metadata_files = [
+                  name for name in wheel_archive.namelist() if name.endswith(".dist-info/METADATA")
+              ]
+              if len(metadata_files) != 1:
+                  raise SystemExit("Wheel must contain exactly one METADATA file")
+              verify_metadata(wheel_archive.read(metadata_files[0]), "Wheel")
+
+          with tarfile.open(sdist, "r:gz") as sdist_archive:
+              pkg_info_files = [
+                  member
+                  for member in sdist_archive.getmembers()
+                  if member.isfile()
+                  and member.name.endswith("/PKG-INFO")
+                  and member.name.count("/") == 1
+              ]
+              if len(pkg_info_files) != 1:
+                  raise SystemExit("Source distribution must contain exactly one root PKG-INFO")
+              pkg_info = sdist_archive.extractfile(pkg_info_files[0])
+              if pkg_info is None:
+                  raise SystemExit("Unable to read source distribution PKG-INFO")
+              verify_metadata(pkg_info.read(), "Source distribution")
+          PY
+      - name: Smoke install wheel and source distribution
+        run: |
+          uv run python - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          repository_root = Path.cwd()
+          with open("pyproject.toml", "rb") as project_file:
+              project = tomllib.load(project_file)["project"]
+
+          project_name = project["name"]
+          project_version = project["version"]
+          filename_name = re.sub(r"[-_.]+", "_", project_name)
+          wheel = repository_root / "dist" / (
+              f"{filename_name}-{project_version}-py3-none-any.whl"
+          )
+          sdist = repository_root / "dist" / f"{filename_name}-{project_version}.tar.gz"
+
+          for artifact in (wheel, sdist):
+              with TemporaryDirectory(prefix="relay-package-smoke-") as temporary_directory:
+                  smoke_root = Path(temporary_directory)
+                  virtual_environment = smoke_root / ".venv"
+                  locked_requirements = smoke_root / "locked-requirements.txt"
+                  subprocess.run(
+                      [
+                          "uv",
+                          "export",
+                          "--frozen",
+                          "--no-dev",
+                          "--no-emit-project",
+                          "--format",
+                          "requirements-txt",
+                          "--output-file",
+                          str(locked_requirements),
+                      ],
+                      cwd=repository_root,
+                      stdout=subprocess.DEVNULL,
+                      check=True,
+                  )
+                  subprocess.run(
+                      ["uv", "venv", "--python", "3.12", str(virtual_environment)],
+                      cwd=smoke_root,
+                      check=True,
+                  )
+                  smoke_python = virtual_environment / "bin" / "python"
+                  subprocess.run(
+                      [
+                          "uv",
+                          "pip",
+                          "sync",
+                          "--require-hashes",
+                          "--python",
+                          str(smoke_python),
+                          str(locked_requirements),
+                      ],
+                      cwd=smoke_root,
+                      check=True,
+                  )
+                  subprocess.run(
+                      [
+                          "uv",
+                          "pip",
+                          "install",
+                          "--no-cache",
+                          "--no-deps",
+                          "--build-constraint",
+                          str(repository_root / ".release-build-constraints.txt"),
+                          "--python",
+                          str(smoke_python),
+                          str(artifact),
+                      ],
+                      cwd=smoke_root,
+                      check=True,
+                  )
+                  subprocess.run(
+                      ["uv", "pip", "check", "--python", str(smoke_python)],
+                      cwd=smoke_root,
+                      check=True,
+                  )
+
+                  import_check = (
+                      "import importlib.metadata, relay; "
+                      "assert relay.__version__ == "
+                      "importlib.metadata.version('relay-hitl-agent') == "
+                      f"{project_version!r}"
+                  )
+                  smoke_environment = {
+                      "HOME": str(smoke_root),
+                      "LANGGRAPH_STRICT_MSGPACK": "true",
+                      "PATH": f"{virtual_environment / 'bin'}:{os.defpath}",
+                      "PYTHONNOUSERSITE": "1",
+                      "RELAY_DATA_DIR": str(smoke_root / "data"),
+                      "RELAY_MODE": "demo",
+                  }
+                  subprocess.run(
+                      [str(smoke_python), "-I", "-c", import_check],
+                      cwd=smoke_root,
+                      env=smoke_environment,
+                      check=True,
+                  )
+                  relay_cli = virtual_environment / "bin" / "relay"
+                  subprocess.run(
+                      [str(relay_cli), "--help"],
+                      cwd=smoke_root,
+                      env=smoke_environment,
+                      check=True,
+                  )
+                  subprocess.run(
+                      [str(relay_cli), "doctor"],
+                      cwd=smoke_root,
+                      env=smoke_environment,
+                      check=True,
+                  )
+                  subprocess.run(
+                      [str(relay_cli), "demo", "reset"],
+                      cwd=smoke_root,
+                      env=smoke_environment,
+                      check=True,
+                  )
+                  print(f"Validated isolated package smoke: {artifact.name}")
+          PY
+      - name: Upload immutable distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-package-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish distributions to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: python-package-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1

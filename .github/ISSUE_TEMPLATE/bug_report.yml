@@ -7,7 +7,8 @@ body:
     attributes:
       value: >-
         Do not include secrets, private records, message content, provider receipts, or exploitable
-        security details. Use GitHub private vulnerability reporting for security issues once it is enabled.
+        security details. Report vulnerabilities through
+        [GitHub's private security form](https://github.com/ownasquare/human-in-the-loop-agent/security/advisories/new).
   - type: input
     id: version
     attributes:
